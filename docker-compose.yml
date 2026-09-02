@@ -1,0 +1,61 @@
+services:
+  tls-init:
+    image: alpine/openssl
+    volumes:
+      - ./tls:/tls
+    entrypoint: sh
+    command: >
+      -c "openssl req -x509 -newkey rsa:2048 -nodes
+      -keyout /tls/vault-key.pem -out /tls/vault-cert.pem
+      -days 1 -subj '/CN=vault'
+      -addext 'subjectAltName=DNS:vault,DNS:localhost,IP:127.0.0.1'"
+
+  vault:
+    image: hashicorp/vault
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - ./vault-config.hcl:/vault/config/vault-config.hcl
+      - ./tls:/vault/tls
+    ports:
+      - "8200:8200"
+    command: server -config=/vault/config/vault-config.hcl
+
+  vault-init:
+    image: hashicorp/vault
+    depends_on:
+      - vault
+    volumes:
+      - ./tls:/tls
+      - ./vault-init-out:/out
+    entrypoint: sh
+    environment:
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /tls/vault-cert.pem
+    command: >
+      -c "
+      until vault status >/dev/null 2>&1; do sleep 1; done;
+      vault operator init -key-shares=1 -key-threshold=1 -format=json > /out/init.json;
+      vault operator unseal $(cat /out/init.json | grep -o '\"unseal_keys_b64\":\\[\"[^\"]*' | cut -d'\"' -f4);
+      export VAULT_TOKEN=$(cat /out/init.json | grep -o '\"root_token\": *\"[^\"]*' | cut -d'\"' -f4);
+      vault policy write iot-device-policy - <<EOF
+      path \"secret/data/iot_device/*\" {
+        capabilities = [\"create\", \"read\", \"update\"]
+      }
+      EOF
+      vault token create -policy=iot-device-policy -field=token > /out/service-token.txt
+      "
+
+  server:
+    build: ./server
+    depends_on:
+      - vault-init
+    volumes:
+      - ./vault-init-out:/vault-init-out
+      - ./tls:/tls
+    environment:
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /tls/vault-cert.pem
+      IOT_UIDS: "device1,device2"
+      SERVER_KEYS: '["key1_base64", "key2_base64", "key3_base64"]'
+      SERVER_P: "3"
