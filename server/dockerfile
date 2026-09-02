@@ -1,0 +1,24 @@
+FROM elixir:1.20.2-slim
+
+ENV MIX_ENV=prod
+# Application environment variables with sensible defaults. These can be overridden
+# at runtime (docker run -e ...) or by docker-compose.
+ENV IOT_UIDS=""
+ENV SERVER_KEYS="{}"
+ENV SERVER_P="1"
+ENV VAULT_ADDR="https://vault:8200"
+ENV VAULT_CACERT="/tls/vault-cert.pem"
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY mix.exs mix.lock ./
+RUN mix deps.get
+
+COPY . .
+RUN mix deps.compile && mix compile
+
+CMD ["mix", "run", "--no-halt"]
