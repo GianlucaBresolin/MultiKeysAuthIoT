@@ -3,6 +3,9 @@ defmodule Server do
   require Logger
 
   alias Server.SecureVault
+  alias Server.Crypto
+
+  @auth_session_timeout String.to_integer(System.get_env("AUTH_SESSION_TIMEOUT", "3600"))
 
   ########################################################################
   ### Server API
@@ -67,7 +70,7 @@ defmodule Server do
     state = %{
       iot_uids: iot_uids,
       auth_sessions: %{},
-      session_keys: %{},
+      sessions: %{},
       n: n,
       p: p
     }
@@ -119,12 +122,21 @@ defmodule Server do
           encrypt_key = xor_binaries(k2, t1)
           r2_t2 = concat_binaries(r2, t2)
 
-          m4 = encrypt(encrypt_key, r2_t2)
+          m4 = Crypto.encrypt_aes_cbc(encrypt_key, r2_t2)
 
           session_key = xor_binaries(k1, k2)
-          updated_session_keys = Map.put(state.session_keys, iot_uid, session_key)
+          session_expiry =
+            DateTime.utc_now()
+            |> DateTime.add(@auth_session_timeout, :second)
 
-          {:reply, {:ok, m4}, %{state | session_keys: updated_session_keys, auth_sessions: updated_auth_sessions}}
+          iot_session = %{
+            key: session_key,
+            data: <<>>,
+            session_expiry: session_expiry
+          }
+          updated_sessions = Map.put(state.sessions, iot_uid, iot_session)
+
+          {:reply, {:ok, m4}, %{state | sessions: updated_session, auth_sessions: updated_auth_sessions}}
         else
           Logger.error("Device #{iot_uid} Auth: failed challenge in M3.")
           {:reply, {:error, :invalid_response}, %{state | auth_sessions: updated_auth_sessions}}
@@ -134,15 +146,30 @@ defmodule Server do
 
   @impl true
   def handle_call({:process_data, iot_uid, encrypted_data}, _from, state) do
-    case Map.fetch(state.session_keys, iot_uid) do
+    case Map.fetch(state.sessions, iot_uid) do
       :error ->
         {:reply, {:error, :auth_session_not_found}, state}
 
-      {:ok, session_key} ->
-        data = decrypt(session_key, encrypted_data)
+      {:ok, session_state} ->
 
-        IO.puts "[server] Received data: #{inspect(data)}"
-        {:reply, :ok, state}
+        with {:ok, session_key} <- Maps.fetch(:key, session_state),
+          false <- session_timeout?(session_state) do
+          data = Crypto.decrypt_aes_cbc(state_session.key, encrypted_data)
+
+          IO.puts "[server] Received data: #{inspect(data)}"
+
+          updated_session = Map.update(session_state, :data, data, fn existing -> existing <> data end)
+
+          {:reply, :ok, %{state | session_data: updated_session_data}}
+        else
+          false ->
+            # handle timeout of session
+            change_keys(iot_uid, session.data)
+            updated_session = Maps.delete(state.sessions, iot_uid)
+            {:reply, {:error, :session_timeout}, state}
+          :error ->
+            {:reply, {:error, :unauthorized}, state}
+        end
     end
   end
 
@@ -161,34 +188,48 @@ defmodule Server do
 
   defp concat_binaries(a, b), do: a <> b
 
-  def encrypt(key, plaintext) do
-    iv = :crypto.strong_rand_bytes(16)
-    padded = pkcs7_pad(plaintext, 16)
-    encrypted = :crypto.crypto_one_time(:aes_128_cbc, key, iv, padded, true)
-    concat_binaries(iv, encrypted)
-  end
-
-  defp pkcs7_pad(data, block_size) do
-    pad_len = rem(block_size - rem(byte_size(data), block_size), block_size)
-    pad_len = if pad_len == 0, do: block_size, else: pad_len
-    data <> :binary.copy(<<pad_len>>, pad_len)
-  end
-
-  defp pkcs7_unpad(data) do
-    pad_len = :binary.last(data)
-    end_index = byte_size(data) - pad_len
-
-    if pad_len > 0 and pad_len <= byte_size(data) and
-         binary_part(data, end_index, pad_len) == :binary.copy(<<pad_len>>, pad_len) do
-      binary_part(data, 0, end_index)
-    else
-      data
+  defp session_timeout?(session_state) do
+    case Map.get(session_state, :session_expiry) do
+      nil -> true
+      expiry -> DateTime.compare(DateTime.utc_now(), expiry) == :gt
     end
   end
 
-  defp decrypt(key, data) do
-    <<iv::binary-16, encrypted::binary>> = data
-    padded = :crypto.crypto_one_time(:aes_128_cbc, key, iv, encrypted, false)
-    pkcs7_unpad(padded)
+  defp change_keys(iot_uid, exchanged_data) do
+    keys = SecureVault.get_keys(iot_uid)
+    concat_keys = concat_binaries(keys)
+
+    h = Crypto.hmac(concat_keys, exchanged_data)
+    k = bit_size(h)
+
+    vault_partitions = split_with_padding(concat_keys, k)
+
+    new_keys = generate_new_keys(vault_paritions, h)
+
+    SecureVault.store_keys(iot_uid, new_keys)
+  end
+
+  defp split_with_padding(data, k) do
+    padding = rem(k - rem(data, k), k)
+
+    data_to_split = <<binary::binary, 0::size(padding)>>
+
+    split_bits(data_to_split, k)
+  end
+
+  def split_bits(data, k, acc \\ [])
+  def split_bits(<<>>, _k, acc), do: Enum.reverse(acc)
+  def split_bits(<<chunk::size(k)-bits, rest::bitstring>>, k, acc) do
+    split_bits(rest, k, [chunk | acc])
+  end
+  def split_bits(remainder, _k, acc), do: Enum.reverse([remainder | acc])
+
+  def generate_new_keys(vault_partitions, h, i \\ 0, acc \\ [])
+  def generate_new_keys([], _h, _i, acc), do: Enum.reverse(acc)
+  def generate_new_keys([vault_partition | rest], h, i, acc) do
+    i_bin = <<i::size(bit_size(h))>>
+    new_key = xor_binaries(vault_partition, xor_binaries(h, i_bin))
+
+    generate_new_keys(rest, h, i + 1, [new_key | acc])
   end
 end
