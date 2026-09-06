@@ -35,10 +35,10 @@ static KEYS_RAW: ([u16; 32], usize) = parse_keys(match option_env!("KEYS") {
     None => "",
 });
 
-static SKEY: &'static str = match option_env!("SKEY") {
-    Some(val) => val,
-    None => "",
+static SKEY: &'static [u8] = match option_env!("SKEY") {
+    Some(val) => val.as_bytes(),
+    None => b"",
 };
 
 pub fn read_initial_keys() -> &'static [u16] { &KEYS_RAW.0[..KEYS_RAW.1] }
-pub fn read_skey() -> &'static str { SKEY }
+pub fn read_skey() -> &'static [u8] { SKEY }

@@ -1,9 +1,15 @@
 [build]
-target = "thumbv6m-none-eabi"
+target = "aarch64-unknown-none"
 
-[target.thumbv6m-none-eabi]
-runner = "qemu-system-arm -cpu cortex-m0 -machine microbit -nographic -semihosting-config enable=on,target=native -kernel"
+[target.aarch64-unknown-none]
+runner = """
+    qemu-system-aarch64 -M virt -cpu max -nographic \
+        -device virtio-net-device,netdev=net0 \
+        -netdev user,id=net0 \
+        -kernel
+    """
 
 rustflags = [
-    "-C", "link-arg=-Tlink.x"       
+    "-C", "link-arg=-Tlink.ld",
+    "-C", "link-arg=-nostartfiles",
 ]
