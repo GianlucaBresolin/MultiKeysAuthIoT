@@ -75,15 +75,16 @@ const fn parse_keys256(s: &str) -> ([[u8; 32]; MAX_KEYS], usize) {
     (keys, count)
 }
 
-static KEYS_RAW: ([[u8; 32]; MAX_KEYS], usize) = parse_keys256(match option_env!("KEYS") {
+static KEYS: ([[u8; 32]; MAX_KEYS], usize) = parse_keys256(match option_env!("KEYS") {
     Some(val) => val,
     None => "",
 });
 
-static SKEY: &'static [u8] = match option_env!("SKEY") {
-    Some(val) => val.as_bytes(),
-    None => b"",
-};
+static SKEY_RAW: ([[u8; 32]; MAX_KEYS], usize) = parse_keys256(match option_env!("SKEY") {
+    Some(val) => val,
+    None => "",
+});
+static SKEY: [u8; 32] = SKEY_RAW.0[0];
 
-pub fn read_initial_keys() -> &'static [[u8; 32]] { &KEYS_RAW.0[..KEYS_RAW.1] }
-pub fn read_skey() -> &'static [u8] { SKEY }
+pub fn read_initial_keys() -> &'static [[u8; 32]] { &KEYS.0[..KEYS.1] }
+pub fn read_skey() -> &'static [u8; 32] { &SKEY }

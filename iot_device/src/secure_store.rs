@@ -2,7 +2,7 @@ use crate::crypto;
 use heapless::Vec;
 use rand_core::Rng;
 
-const MASTER_KEY_LEN: usize = 32;
+const SKEY_LEN: usize = 32;
 const KEY_LEN: usize = 32;
 const IV_LEN: usize = 16;
 const MAX_KEYS: usize = 1024;
@@ -22,23 +22,23 @@ pub enum Error {
 }
 
 pub struct DeviceKeyStore<R: Rng> {
-    master_key: [u8; MASTER_KEY_LEN],
+    skey: [u8; SKEY_LEN],
     rng: R,
     ciphertext: Vec<u8, CIPHERTEXT_BUF_LEN>,
     key_count: usize,
 }
 
 impl<R: Rng> DeviceKeyStore<R> {
-    pub fn init(master_key: [u8; MASTER_KEY_LEN], rng: R) -> Self {
+    pub fn init(skey: [u8; SKEY_LEN], rng: R) -> Self {
         Self {
-            master_key,
+            skey,
             rng,
             ciphertext: Vec::new(),
             key_count: 0,
         }
     }
 
-    pub fn store_keys_raw(
+    pub fn store_keys(
         &mut self,
         keys: &[[u8; KEY_LEN]],
         key_count: usize,
@@ -56,7 +56,7 @@ impl<R: Rng> DeviceKeyStore<R> {
         }
 
         let mut out_buf = [0u8; CIPHERTEXT_BUF_LEN];
-        let n = crypto::encrypt_aes_cbc(&mut self.rng, &self.master_key, &plaintext, &mut out_buf);
+        let n = crypto::encrypt_aes_cbc(&mut self.rng, &self.skey, &plaintext, &mut out_buf);
 
         self.ciphertext.clear();
         self.ciphertext
@@ -75,7 +75,7 @@ impl<R: Rng> DeviceKeyStore<R> {
 
         let mut plaintext_buf = [0u8; PLAINTEXT_BUF_LEN];
         let plaintext =
-            crypto::decrypt_aes_cbc(&self.master_key, &self.ciphertext, &mut plaintext_buf);
+            crypto::decrypt_aes_cbc(&self.skey, &self.ciphertext, &mut plaintext_buf);
 
         let mut keys: Vec<[u8; KEY_LEN], MAX_KEYS> = Vec::new();
 
