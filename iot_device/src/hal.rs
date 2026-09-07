@@ -18,7 +18,7 @@ unsafe impl Hal for MyHal {
         let offset = DMA_OFFSET.fetch_add(size, Ordering::SeqCst);
         assert!(offset + size <= DMA_POOL_SIZE, "DMA pool exhausted");
 
-        let ptr = unsafe { DMA_POOL.0.as_mut_ptr().add(offset) };
+        let ptr = unsafe { (core::ptr::addr_of_mut!(DMA_POOL.0) as *mut u8).add(offset) };
         let paddr = ptr as usize as PhysAddr;
         let vaddr = NonNull::new(ptr).unwrap();
         (paddr, vaddr)

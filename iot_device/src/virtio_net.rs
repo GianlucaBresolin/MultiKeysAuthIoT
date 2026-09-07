@@ -1,17 +1,25 @@
 use virtio_drivers::device::net::VirtIONet;
-use virtio_drivers::transport::Transport;
+use virtio_drivers::transport::{DeviceType, Transport};
 use virtio_drivers::Hal;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
 
-const VIRTIO_NET_MMIO_ADDR: usize = 0x0A00_0000;
+const VIRTIO_MMIO_BASE: usize = 0x0A00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
+const VIRTIO_MMIO_SLOTS: usize = 32;
 
 pub fn init_net_transport() -> MmioTransport<'static> {
-    let header = unsafe { &mut *(VIRTIO_NET_MMIO_ADDR as *mut VirtIOHeader) };
-    unsafe { MmioTransport::new(header.into(), VIRTIO_MMIO_STRIDE) }
-        .expect("virtio-net mmio init failed")
+    for i in 0..VIRTIO_MMIO_SLOTS {
+        let addr = VIRTIO_MMIO_BASE + i * VIRTIO_MMIO_STRIDE;
+        let header = unsafe { &mut *(addr as *mut VirtIOHeader) };
+        if let Ok(transport) = unsafe { MmioTransport::new(header.into(), VIRTIO_MMIO_STRIDE) } {
+            if transport.device_type() == DeviceType::Network {
+                return transport;
+            }
+        }
+    }
+    panic!("virtio-net device not found");
 }
 
 pub struct VirtioNetDevice<H: Hal, T: Transport> {
