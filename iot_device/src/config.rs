@@ -86,5 +86,28 @@ static SKEY_RAW: ([[u8; 32]; MAX_KEYS], usize) = parse_keys256(match option_env!
 });
 static SKEY: [u8; 32] = SKEY_RAW.0[0];
 
+const fn parse_u8(s: &str, default: u8) -> u8 {
+    let bytes = s.as_bytes();
+    if bytes.len() == 0 {
+        return default;
+    }
+    let mut n: u8 = 0;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b >= b'0' && b <= b'9' {
+            // avoid overflow; keep within u8
+            n = n.saturating_mul(10).saturating_add((b - b'0') as u8);
+        }
+        i += 1;
+    }
+    if n == 0 { default } else { n }
+}
+
+const IOT_UID: u8 = parse_u8(match option_env!("IOT_UID") { Some(v) => v, None => "" }, 1u8);
+const P_VAL: u8 = parse_u8(match option_env!("P") { Some(v) => v, None => "" }, 2u8);
+
 pub fn read_initial_keys() -> &'static [[u8; 32]] { &KEYS.0[..KEYS.1] }
 pub fn read_skey() -> &'static [u8; 32] { &SKEY }
+pub fn read_iot_uid() -> u8 { IOT_UID }
+pub fn read_p() -> u8 { P_VAL }

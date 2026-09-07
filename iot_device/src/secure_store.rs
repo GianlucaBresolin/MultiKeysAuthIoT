@@ -21,27 +21,26 @@ pub enum Error {
     NotInitialized,
 }
 
-pub struct DeviceKeyStore<R: Rng> {
+pub struct DeviceKeyStore {
     skey: [u8; SKEY_LEN],
-    rng: R,
     ciphertext: Vec<u8, CIPHERTEXT_BUF_LEN>,
     key_count: usize,
 }
 
-impl<R: Rng> DeviceKeyStore<R> {
-    pub fn init(skey: [u8; SKEY_LEN], rng: R) -> Self {
+impl DeviceKeyStore {
+    pub fn init(skey: [u8; SKEY_LEN]) -> Self {
         Self {
             skey,
-            rng,
             ciphertext: Vec::new(),
             key_count: 0,
         }
     }
 
-    pub fn store_keys(
+    pub fn store_keys<RNG: Rng>(
         &mut self,
         keys: &[[u8; KEY_LEN]],
         key_count: usize,
+        rng: &mut RNG,
     ) -> Result<(), Error> {
         if key_count > MAX_KEYS {
             return Err(Error::TooManyKeys);
@@ -56,7 +55,7 @@ impl<R: Rng> DeviceKeyStore<R> {
         }
 
         let mut out_buf = [0u8; CIPHERTEXT_BUF_LEN];
-        let n = crypto::encrypt_aes_cbc(&mut self.rng, &self.skey, &plaintext, &mut out_buf);
+        let n = crypto::encrypt_aes_cbc(rng, &self.skey, &plaintext, &mut out_buf);
 
         self.ciphertext.clear();
         self.ciphertext
