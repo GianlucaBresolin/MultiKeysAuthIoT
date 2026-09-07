@@ -16,7 +16,7 @@ pub struct AuthManager<'a, R>
 where
     R: Rng,
 {
-    key_store: &'a DeviceKeyStore,
+    key_store: &'a mut DeviceKeyStore,
     rng: R,
     comm: CommunicationManager<'a>,
     iot_uid: u8,
@@ -24,10 +24,8 @@ where
     t1: Option<u64>,
     r2: Option<[u8; 8]>,
     session_key: Option<[u8; 32]>,
-    coap_buf: [u8; 256],
-    coap_len: usize,
-    message_id: u16,
     last_c2: HVec<u8, 64>,
+    telemetry_buffer: Vec<u8>,
 }
 
 impl<'a, R> AuthManager<'a, R>
@@ -35,7 +33,7 @@ where
     R: Rng,
 {
     pub fn new(
-        key_store: &'a DeviceKeyStore,
+        key_store: &'a mut DeviceKeyStore,
         rng: R,
         comm: CommunicationManager<'a>,
         iot_uid: u8,
@@ -50,10 +48,8 @@ where
             t1: None,
             r2: None,
             session_key: None,
-            coap_buf: [0u8; 256],
-            coap_len: 0,
-            message_id: 0,
             last_c2: HVec::new(),
+            telemetry_buffer: Vec::new(),
         }
     }
 
@@ -250,8 +246,57 @@ where
         uart::puts("AuthManager: session key established\r\n");
     }
 
-    pub fn get_session_key(&self) -> Option<[u8; 32]> {
-        self.session_key
+    pub fn append_acked_telemetry(&mut self, data: &[u8]) {
+        self.telemetry_buffer.extend_from_slice(data);
+    }
+
+    pub fn update_keys(&mut self) -> Result<(), crate::secure_store::Error> {
+        let keys = match self.key_store.get_keys() {
+            Ok(k) => k,
+            Err(e) => return Err(e),
+        };
+
+        let mut concat_old_keys: Vec<u8> = Vec::new();
+        for kb in keys.iter() {
+            concat_old_keys.extend_from_slice(kb);
+        }
+
+        // h = HMAC(concat_old_keys, telemetry_buffer)
+        let mut h = [0u8; 32];
+        let key_for_hmac = &self.telemetry_buffer[..];
+        crypto::hmac(&concat_old_keys, key_for_hmac, &mut h);
+
+        let k = h.len(); // bytes per block (32)
+
+        // split concat_old_keys into blocks of size k (pad last block with zeros)
+        let mut new_keys: Vec<[u8; 32]> = Vec::new();
+        let mut idx = 0usize;
+        let mut vault_partition_index: u8 = 0;
+        while idx < concat_old_keys.len() {
+            let take = core::cmp::min(k, concat_old_keys.len() - idx);
+            let mut vault_partition = [0u8; 32];
+            vault_partition[..take].copy_from_slice(&&concat_old_keys[idx..idx + take]);
+            // pad rest with zeros (already zeroed)
+
+            // compute mask = h XOR block_index (byte-wise) and new_key = vault_partition XOR mask
+            let mut mask = [0u8; 32];
+            for b in 0..k {
+                mask[b] = h[b] ^ vault_partition_index;
+            }
+            let mut new_key = [0u8; 32];
+            for b in 0..k {
+                new_key[b] = vault_partition[b] ^ mask[b];
+            }
+
+            new_keys.push(new_key);
+
+            idx += take;
+            vault_partition_index = vault_partition_index.wrapping_add(1);
+        }
+
+        // 5) store back into secure vault (uses AuthManager's RNG)
+        self.key_store
+            .store_keys(&new_keys[..], new_keys.len(), &mut self.rng)
     }
 
     ////////////////////////////////////////////////////////////////
@@ -269,7 +314,20 @@ where
     }
 
     pub fn send_telemetry(&mut self, payload: &[u8]) -> bool {
-        self.comm.send_to_server(payload)
+        // Ensure we have a session key
+        let session_key = match self.session_key {
+            Some(k) => k,
+            None => {
+                uart::puts("AuthManager: no session key available, cannot send telemetry\r\n");
+                return false;
+            }
+        };
+
+        // Encrypt payload with session key (AES-CBC -> IV || ciphertext)
+        let mut out_buf = [0u8; AES_IV_AND_PAD_BUF];
+        let enc_len = crypto::encrypt_aes_cbc(&mut self.rng, &session_key, payload, &mut out_buf);
+
+        self.comm.send_to_server(&out_buf[..enc_len])
     }
 
     pub fn try_receive_parsed(&mut self) -> Option<crate::communication_manager::CommResponse> {
