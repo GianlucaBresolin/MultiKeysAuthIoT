@@ -12,17 +12,25 @@ services:
 
   vault:
     image: hashicorp/vault
+    restart: "no"
     cap_add:
       - IPC_LOCK
     volumes:
       - ./vault-config.hcl:/vault/config/vault-config.hcl
       - ./tls:/vault/tls
+    environment:
+      - VAULT_ADDR=https://127.0.0.1:8200
+      - VAULT_SKIP_VERIFY=true
     ports:
       - "8200:8200"
-    command: server -config=/vault/config/vault-config.hcl
-
+    entrypoint: ["vault"]
+    command: ["server", "-config=/vault/config/vault-config.hcl"]
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    
   vault-init:
-    image: hashicorp/vault
+    build: ./vault-init
     depends_on:
       - vault
     volumes:
@@ -32,19 +40,24 @@ services:
     environment:
       VAULT_ADDR: https://vault:8200
       VAULT_CACERT: /tls/vault-cert.pem
-    command: >
-      -c "
-      until vault status >/dev/null 2>&1; do sleep 1; done;
-      vault operator init -key-shares=1 -key-threshold=1 -format=json > /out/init.json;
-      vault operator unseal $(cat /out/init.json | grep -o '\"unseal_keys_b64\":\\[\"[^\"]*' | cut -d'\"' -f4);
-      export VAULT_TOKEN=$(cat /out/init.json | grep -o '\"root_token\": *\"[^\"]*' | cut -d'\"' -f4);
-      vault policy write iot-device-policy - <<EOF
-      path \"secret/data/iot_device/*\" {
-        capabilities = [\"create\", \"read\", \"update\"]
-      }
-      EOF
-      vault token create -policy=iot-device-policy -field=token > /out/service-token.txt
-      "
+    command:
+      - -c
+      - |
+        set -x
+        until vault status >/dev/null 2>&1; [ $$? -ne 1 ]; do sleep 1; done
+
+        vault operator init -key-shares=1 -key-threshold=1 -format=json > /out/init.json
+
+        UNSEAL_KEY=$$(jq -r '.unseal_keys_b64[0]' /out/init.json)
+        ROOT_TOKEN=$$(jq -r '.root_token' /out/init.json)
+
+        vault operator unseal "$$UNSEAL_KEY"
+        export VAULT_TOKEN="$$ROOT_TOKEN"
+
+        printf 'path "secret/data/iot_device/*" {\n  capabilities = ["create", "read", "update"]\n}\n' > /tmp/iot-device-policy.hcl
+
+        vault policy write iot-device-policy /tmp/iot-device-policy.hcl
+        vault token create -policy=iot-device-policy -field=token > /out/service-token.txt
 
   server:
     build: ./server
@@ -53,9 +66,46 @@ services:
     volumes:
       - ./vault-init-out:/vault-init-out
       - ./tls:/tls
+    env_file:
+      - .env
+    networks:
+      iot_net:
+        ipv4_address: 172.20.0.2
+    ports: 
+      - "5683:5683/udp"
     environment:
       VAULT_ADDR: https://vault:8200
       VAULT_CACERT: /tls/vault-cert.pem
       IOT_UIDS: "device1,device2"
-      SERVER_KEYS: '["key1_base64", "key2_base64", "key3_base64"]'
-      SERVER_P: "3"
+      SERVER_KEYS: ${SERVER_KEYS:-}
+      SERVER_P: ${P:-3}
+
+  iot_device: 
+    build:
+      context: .
+      dockerfile: iot_device/dockerfile
+      args:
+        KEYS: ${KEYS:-}
+        SKEY: ${SKEY:-}
+        KEY_COUNT: ${KEY_COUNT:-16}
+        IOT_UID: ${IOT_UID:-1}
+        P: ${P:-2}
+    env_file:
+      - .env
+    depends_on:
+      - server
+    networks:
+      iot_net:
+        ipv4_address: 172.20.0.3
+    environment:
+      - KEY_COUNT=${KEY_COUNT:-16}
+      - IOT_UID=${IOT_UID:-1}
+      - P=${P:-2}
+      - SERVER_IP=172.20.0.2
+      - SERVER_PORT=5683
+      
+networks:
+  iot_net:
+    ipam:
+      config: 
+        - subnet: 172.20.0.0/16

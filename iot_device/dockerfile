@@ -1,1 +1,62 @@
-FROM rust:1.85-bookworm
+FROM rust:latest AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    curl \
+    git \
+    lld \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/multikeyauthiot
+
+COPY . .
+
+# Raccogli i build-args passati da docker-compose
+ARG KEYS=""
+ARG SKEY=""
+ARG KEY_COUNT="16"
+ARG IOT_UID="1"
+ARG P="2"
+
+# Esportali come variabili d'ambiente visibili a cargo/rustc durante la RUN successiva
+ENV KEYS=$KEYS \
+    SKEY=$SKEY \
+    KEY_COUNT=$KEY_COUNT \
+    IOT_UID=$IOT_UID \
+    P=$P
+
+RUN rustup toolchain install nightly && \
+    rustup component add rust-src --toolchain nightly || true && \
+    cd iot_device && \
+    cargo +nightly -Z build-std=core,alloc -Z json-target-spec build --release --target aarch64-unknown-none.json
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    qemu-system-arm \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/src/multikeyauthiot/iot_device/target/aarch64-unknown-none/release/iot_device /usr/local/bin/iot_device
+
+ENV KEYS="" \
+    SKEY="" \
+    KEY_COUNT=16 \
+    IOT_UID=1 \
+    P=2 \
+    SERVER_IP=172.20.0.2 \
+    SERVER_PORT=5683
+
+ENTRYPOINT ["qemu-system-aarch64", \
+    "-M", "virt", \
+    "-cpu", "max", \
+    "-m", "128M", \
+    "-nographic", \
+    "-device", "virtio-net-device,netdev=net0", \
+    "-netdev", "user,id=net0", \
+    "-device", "virtio-rng-device", \
+    "-kernel", "/usr/local/bin/iot_device"]
+CMD []
