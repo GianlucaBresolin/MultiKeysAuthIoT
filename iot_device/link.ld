@@ -3,12 +3,18 @@ ENTRY(_start)
 
 MEMORY
 {
-    RAM : ORIGIN = 0x40080000, LENGTH = 128M
+    RAM : ORIGIN = 0x40000000, LENGTH = 128M
 }
 
 SECTIONS
 {
     . = ORIGIN(RAM);
+
+    .dma (NOLOAD) : ALIGN(4096) {
+        __dma_start = .;
+        . += 0x400000;
+        __dma_end = .;
+    } > RAM
 
     .text : {
         *(.text._start)

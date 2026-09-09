@@ -1,12 +1,11 @@
-[build]
-target = "aarch64-unknown-none"
-
 [target.aarch64-unknown-none]
 runner = [
     "qemu-system-aarch64",
     "-M", "virt",
     "-cpu", "max",
+    "-m", "128M",
     "-nographic",
+    "-global", "virtio-mmio.force-legacy=false", 
     "-device", "virtio-net-device,netdev=net0",
     "-netdev", "user,id=net0",
     "-device", "virtio-rng-device",

@@ -3,10 +3,13 @@ name = "iot_device"
 version = "0.1.0"
 edition = "2024"
  
+[build-dependencies]
+cc = "1"
+
 [dependencies]
 heapless = { version = "0.9.3", default-features = false }
 rand_core = { version = "0.10.1", default-features = false }
-virtio-drivers = "0.13"
+virtio-drivers = "=0.13.0"
 smoltcp = { version = "0.14", default-features = false, features = ["medium-ethernet", "socket-udp", "proto-ipv4"] }
 aes = { version = "0.8", default-features = false }
 cbc = { version = "0.1", default-features = false }

@@ -7,7 +7,6 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use alloc::string::String;
 use core::ptr;
 
 // Helper: trim JSON array brackets and quotes, split on commas, trim spaces
@@ -136,20 +135,23 @@ fn parse_keys_from_json_base64(s: &str) -> Vec<[u8;32]> {
 }
 
 // Globals stored as leaked boxed slices for 'static lifetime
-static mut KEYS_PTR: *const [ [u8;32] ] = ptr::null();
 static mut SKEY_PTR: *const [u8;32] = ptr::null();
+static mut KEYS_PTR: *const [u8; 32] = ptr::null();
+static mut KEYS_LEN: usize = 0;
 
 pub fn read_initial_keys() -> &'static [[u8; 32]] {
     unsafe {
         if !KEYS_PTR.is_null() {
-            &*KEYS_PTR
+            core::slice::from_raw_parts(KEYS_PTR, KEYS_LEN)
         } else {
             let s = match option_env!("KEYS") { Some(v) => v, None => "" };
             let vec = parse_keys_from_json_base64(s);
             let boxed: Box<[[u8;32]]> = vec.into_boxed_slice();
-            let ptr = Box::into_raw(boxed);
+            let len = boxed.len();
+            let ptr = Box::into_raw(boxed) as *const [u8; 32];
             KEYS_PTR = ptr;
-            &*KEYS_PTR
+            KEYS_LEN = len;
+            core::slice::from_raw_parts(KEYS_PTR, KEYS_LEN)
         }
     }
 }
@@ -205,8 +207,3 @@ pub fn read_p() -> u8 {
         None => 2,
     }
 }
-
-pub fn read_initial_keys() -> &'static [[u8; 32]] { &KEYS.0[..KEYS.1] }
-pub fn read_skey() -> &'static [u8; 32] { &SKEY }
-pub fn read_iot_uid() -> u8 { IOT_UID }
-pub fn read_p() -> u8 { P_VAL }
