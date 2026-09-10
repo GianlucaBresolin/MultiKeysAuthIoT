@@ -10,11 +10,19 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rerun-if-changed=link.ld");
 
-    cc::Build::new()
-        .file("src/boot.S")
-        .compiler("aarch64-linux-gnu-gcc")
-        .flag("-mcpu=generic")
-        .flag("-nostdlib")
-        .compile("boot");
+    let mut build = cc::Build::new();
+    build.file("src/boot.S");
+
+    if cfg!(target_os = "macos") {
+        build.compiler("clang");
+        build.flag("--target=aarch64-none-elf");
+    } else {
+        build.compiler("aarch64-linux-gnu-gcc");
+    }
+
+    build.flag("-mcpu=generic");
+    build.flag("-nostdlib");
+    build.compile("boot");
+
     println!("cargo:rerun-if-changed=src/boot.S");
 }

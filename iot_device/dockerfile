@@ -1,19 +1,15 @@
-FROM rust:latest AS builder
+FROM rust:1.91-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    pkg-config \
-    libssl-dev \
-    ca-certificates \
-    curl \
-    git \
-    lld \
+RUN apt-get update && apt-get install -y \
+    qemu-system-arm \
     gcc-aarch64-linux-gnu \
-  && rm -rf /var/lib/apt/lists/*
+    binutils-aarch64-linux-gnu \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/multikeyauthiot
-
-COPY . .
+RUN rustup target add aarch64-unknown-none && \
+    rustup component add rust-src
 
 ARG KEYS
 ARG SKEY
@@ -21,37 +17,27 @@ ARG KEY_COUNT
 ARG IOT_UID
 ARG P
 
-ENV KEYS=$KEYS \
-    SKEY=$SKEY \
-    KEY_COUNT=$KEY_COUNT \
-    IOT_UID=$IOT_UID \
-    P=$P
+ENV KEYS=${KEYS}
+ENV SKEY=${SKEY}
+ENV KEY_COUNT=${KEY_COUNT}
+ENV IOT_UID=${IOT_UID}
+ENV P=${P}
 
-RUN rustup target add aarch64-unknown-none && \
-    cd iot_device && \
-    cargo build --release --target aarch64-unknown-none
+WORKDIR /app
+COPY . .
 
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+RUN apt-get update && apt-get install -y \
     qemu-system-arm \
-    qemu-system-aarch64 \
-  && rm -rf /var/lib/apt/lists/*
+    gcc-aarch64-linux-gnu \
+    binutils-aarch64-linux-gnu \
+    build-essential \
+    curl \
+    iproute2 \
+    tcpdump \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/multikeyauthiot/iot_device/target/aarch64-unknown-none/release/iot_device /usr/local/bin/iot_device
+COPY /entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-ENV KEYS="" \
-    SKEY=""
-
-ENTRYPOINT ["qemu-system-aarch64", \
-    "-M", "virt", \
-    "-cpu", "cortex-a72", \
-    "-m", "128M", \
-    "-nographic", \
-    "-global", "virtio-mmio.force-legacy=false", \
-    "-device", "virtio-net-device,netdev=net0", \
-    "-netdev", "user,id=net0", \
-    "-device", "virtio-rng-device", \
-    "-kernel", "/usr/local/bin/iot_device"]
-CMD []
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["cargo", "run", "--release", "--target", "aarch64-unknown-none"]

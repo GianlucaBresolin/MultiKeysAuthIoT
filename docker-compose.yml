@@ -63,11 +63,6 @@ services:
     build: ./server
     depends_on:
       - vault-init
-    healthcheck:
-      test: ["CMD", "true"]
-      interval: 2s
-      start_period: 5s
-      retries: 1
     volumes:
       - ./vault-init-out:/vault-init-out
       - ./tls:/tls
@@ -81,34 +76,36 @@ services:
     environment:
       VAULT_ADDR: https://vault:8200
       VAULT_CACERT: /tls/vault-cert.pem
-      IOT_UIDS: "device1,device2"
+      IOT_UIDS: "1"
       SERVER_KEYS: ${SERVER_KEYS:-}
       SERVER_P: ${P:-3}
 
   iot_device: 
     build:
-      context: .
-      dockerfile: iot_device/dockerfile
+      context: ./iot_device
+      dockerfile: dockerfile
       args:
         KEYS: ${KEYS:-}
         SKEY: ${SKEY:-}
         KEY_COUNT: ${KEY_COUNT:-16}
         IOT_UID: ${IOT_UID:-1}
-        P: ${P:-2}
+        P: ${P:-3}
+    tty: true
+    stdin_open: true
     env_file:
       - .env
     depends_on:
-      server:
-        condition: service_healthy
+      - server
     networks:
       iot_net:
         ipv4_address: 172.20.0.3
     environment:
-      - KEY_COUNT=${KEY_COUNT:-16}
-      - IOT_UID=${IOT_UID:-1}
-      - P=${P:-2}
       - SERVER_IP=172.20.0.2
       - SERVER_PORT=5683
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
       
 networks:
   iot_net:

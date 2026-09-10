@@ -1,2 +1,5 @@
 /tls
 /vault-init-out
+/.env
+
+*.pcap

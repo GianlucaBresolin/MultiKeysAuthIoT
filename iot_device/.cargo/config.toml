@@ -5,9 +5,9 @@ runner = [
     "-cpu", "max",
     "-m", "128M",
     "-nographic",
-    "-global", "virtio-mmio.force-legacy=false", 
-    "-device", "virtio-net-device,netdev=net0",
-    "-netdev", "user,id=net0",
+    "-global", "virtio-mmio.force-legacy=false",
+    "-device", "virtio-net-device,netdev=net0,mac=52:54:00:12:34:56",
+    "-netdev", "tap,id=net0,ifname=tap0,script=no,downscript=no",
     "-device", "virtio-rng-device",
     "-kernel"
 ]

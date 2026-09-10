@@ -15,8 +15,15 @@ defmodule Server do
     GenServer.start_link(__MODULE__, {iot_uids, keys, p}, name: __MODULE__)
   end
 
-  def process_m1(payload) do
-    <<uid_len::8, iot_uid::binary-size(uid_len)>> = payload
+  def process_m1(payload, _request \\ %{}) do
+    IO.puts("Server: Received M1 payload: #{inspect(payload)}")
+    # Support two formats: [uid_len(1) | uid_bytes] or single-byte numeric uid
+    {iot_uid, _rest} =
+      case payload do
+        <<uid_len::8, iot_uid::binary-size(uid_len), rest::binary>> -> {iot_uid, rest}
+        <<uid_u8::8, rest::binary>> -> {<<uid_u8::8>>, rest}
+        _ -> {payload, <<>>}
+      end
 
     case GenServer.call(__MODULE__, {:process_m1, iot_uid}) do
       {:ok, {c1, r1}} ->
@@ -30,8 +37,13 @@ defmodule Server do
     end
   end
 
-  def process_m3(payload) do
-    <<uid_len::8, iot_uid::binary-size(uid_len), m3::binary>> = payload
+  def process_m3(payload, _request \\ %{}) do
+    {iot_uid, m3} =
+      case payload do
+        <<uid_len::8, iot_uid::binary-size(uid_len), rest::binary>> -> {iot_uid, rest}
+        <<uid_u8::8, rest::binary>> -> {<<uid_u8::8>>, rest}
+        _ -> {<<>>, payload}
+      end
 
     case GenServer.call(__MODULE__, {:process_m3, iot_uid, m3}) do
       {:ok, m4} ->
@@ -42,8 +54,13 @@ defmodule Server do
     end
   end
 
-  def process_data(payload) do
-    <<uid_len::8, iot_uid::binary-size(uid_len), encrypted_data::binary>> = payload
+  def process_data(payload, _request \\ %{}) do
+    {iot_uid, encrypted_data} =
+      case payload do
+        <<uid_len::8, iot_uid::binary-size(uid_len), rest::binary>> -> {iot_uid, rest}
+        <<uid_u8::8, rest::binary>> -> {<<uid_u8::8>>, rest}
+        _ -> {<<>>, payload}
+      end
 
     case GenServer.call(__MODULE__, {:process_data, iot_uid, encrypted_data}) do
       :ok ->
@@ -67,6 +84,8 @@ defmodule Server do
       SecureVault.store_keys(uid, keys)
     end)
 
+    IO.puts("Server: SecureVault initialized with #{n} keys for #{length(iot_uids)} IoT devices.")
+
     state = %{
       iot_uids: iot_uids,
       auth_sessions: %{},
@@ -80,9 +99,9 @@ defmodule Server do
 
   @impl true
   def handle_call({:process_m1, m1}, _from, state) do
-    # check if m1 is a valid iot_device_uid
+    # check if m1 is a valid iot_device_uid (both are binaries)
     if Enum.member?(state.iot_uids, m1) do
-      c1 = Enum.take_random(0..(state.n-1), state.p)
+      c1 = Enum.take_random(0..(state.n - 1), state.p)
       r1 = :crypto.strong_rand_bytes(8)
 
       m2 = {c1, r1}
@@ -101,30 +120,32 @@ defmodule Server do
     # decrypt m3
     case Map.fetch(state.auth_sessions, iot_uid) do
       :error ->
-        {:reply, {:error, :auth_session_not_found}}
+        {:reply, {:error, :auth_session_not_found}, state}
 
       {:ok, %{k1: k1, r1: r1}} ->
-        decrypted_m3 = decrypt(k1, m3)
+        decrypted_m3 = Crypto.decrypt_aes_cbc(k1, m3)
         p = state.p
-        <<r1_recv::binary-8, t1::binary-16, indices::binary-size(^p), r2::binary-8>> = decrypted_m3
+        # decrypted format expected: r1(8) || t1(8) || indices(p bytes) || r2(8)
+        <<r1_recv::binary-8, t1::binary-8, indices::binary-size(^p), r2::binary-8>> = decrypted_m3
 
         updated_auth_sessions = Map.delete(state.auth_sessions, iot_uid)
 
         if r1_recv == r1 do
-          Logger.info("Device #{iot_uid} Auth: Succesfull. \n")
+          Logger.info("Device #{inspect(iot_uid)} Auth: Successful.")
 
           c2 = :binary.bin_to_list(indices)
 
           k2 = generate_key(iot_uid, c2)
 
-          t2 = :crypto.strong_rand_bytes(16)
+          t2 = :crypto.strong_rand_bytes(8)
 
-          encrypt_key = xor_binaries(k2, t1)
+          encrypt_key = xor_binaries(k2, expand_key(t1, byte_size(k2)))
+
           r2_t2 = concat_binaries(r2, t2)
 
-          m4 = Crypto.encrypt_aes_cbc(encrypt_key, r2_t2)
+          m4 = Server.Crypto.encrypt_aes_cbc(encrypt_key, r2_t2)
 
-          session_key = xor_binaries(k1, k2)
+          session_key = expand_xor(t1, t2, 32)
           session_expiry =
             DateTime.utc_now()
             |> DateTime.add(@auth_session_timeout, :second)
@@ -136,9 +157,9 @@ defmodule Server do
           }
           updated_sessions = Map.put(state.sessions, iot_uid, iot_session)
 
-          {:reply, {:ok, m4}, %{state | sessions: updated_session, auth_sessions: updated_auth_sessions}}
+          {:reply, {:ok, m4}, %{state | sessions: updated_sessions, auth_sessions: updated_auth_sessions}}
         else
-          Logger.error("Device #{iot_uid} Auth: failed challenge in M3.")
+          Logger.error("Device #{inspect(iot_uid)} Auth: failed challenge in M3.")
           {:reply, {:error, :invalid_response}, %{state | auth_sessions: updated_auth_sessions}}
         end
     end
@@ -151,24 +172,27 @@ defmodule Server do
         {:reply, {:error, :auth_session_not_found}, state}
 
       {:ok, session_state} ->
+        session_key = Map.get(session_state, :key)
 
-        with {:ok, session_key} <- Maps.fetch(:key, session_state),
-          false <- session_timeout?(session_state) do
-          data = Crypto.decrypt_aes_cbc(state_session.key, encrypted_data)
-
-          IO.puts "[server] Received data: #{inspect(data)}"
-
-          updated_session = Map.update(session_state, :data, data, fn existing -> existing <> data end)
-
-          {:reply, :ok, %{state | session_data: updated_session_data}}
-        else
-          false ->
-            # handle timeout of session
-            change_keys(iot_uid, session.data)
-            updated_session = Maps.delete(state.sessions, iot_uid)
-            {:reply, {:error, :session_timeout}, state}
-          :error ->
+        cond do
+          session_key == nil ->
             {:reply, {:error, :unauthorized}, state}
+
+          session_timeout?(session_state) ->
+            change_keys(iot_uid, Map.get(session_state, :data))
+            updated_sessions = Map.delete(state.sessions, iot_uid)
+            {:reply, {:error, :session_timeout}, %{state | sessions: updated_sessions}}
+
+          true ->
+            data = Server.Crypto.decrypt_aes_cbc(session_key, encrypted_data)
+
+            Logger.info("[server] Received data: #{inspect(data)}")
+
+            existing = Map.get(session_state, :data, <<>>)
+            updated_session_state = Map.put(session_state, :data, existing <> data)
+            updated_sessions = Map.put(state.sessions, iot_uid, updated_session_state)
+
+            {:reply, :ok, %{state | sessions: updated_sessions}}
         end
     end
   end
@@ -178,6 +202,12 @@ defmodule Server do
   ########################################################################
   defp generate_key(iot_uid, indeces) do
     keys = SecureVault.get_keys(iot_uid)
+             |> Enum.map(fn k ->
+               case Base.decode64(k) do
+                 {:ok, bin} -> bin
+                 _ -> k
+               end
+             end)
 
     indeces
     |> Enum.map(fn index -> Enum.at(keys, index) end)
@@ -197,32 +227,53 @@ defmodule Server do
 
   defp change_keys(iot_uid, exchanged_data) do
     keys = SecureVault.get_keys(iot_uid)
-    concat_keys = concat_binaries(keys)
+    concat_keys = Enum.map(keys, fn k ->
+      case Base.decode64(k) do
+        {:ok, bin} -> bin
+        _ -> k
+      end
+    end) |> :erlang.iolist_to_binary()
 
     h = Crypto.hmac(concat_keys, exchanged_data)
     k = bit_size(h)
 
     vault_partitions = split_with_padding(concat_keys, k)
 
-    new_keys = generate_new_keys(vault_paritions, h)
+    new_keys = generate_new_keys(vault_partitions, h)
 
     SecureVault.store_keys(iot_uid, new_keys)
   end
 
-  defp split_with_padding(data, k) do
-    padding = rem(k - rem(data, k), k)
+  defp expand_key(short, len) do
+    # repeat the bytes of short until len reached
+    repeated = :binary.copy(short, div(len, byte_size(short)) + 1)
+    binary_part(repeated, 0, len)
+  end
 
-    data_to_split = <<binary::binary, 0::size(padding)>>
+  defp expand_xor(a, b, out_len) do
+    a_rep = expand_key(a, out_len)
+    b_rep = expand_key(b, out_len)
+    xor_binaries(a_rep, b_rep)
+  end
+
+  defp split_with_padding(data, k) do
+    padding = rem(k - rem(bit_size(data), k), k)
+
+    data_to_split = <<data::bitstring, 0::size(padding)>>
 
     split_bits(data_to_split, k)
   end
 
-  def split_bits(data, k, acc \\ [])
-  def split_bits(<<>>, _k, acc), do: Enum.reverse(acc)
-  def split_bits(<<chunk::size(k)-bits, rest::bitstring>>, k, acc) do
-    split_bits(rest, k, [chunk | acc])
+  def split_bits(k, data, acc \\ [])
+  def split_bits(k, data, acc) do
+    case data do
+      <<chunk::size(^k)-bits, rest::bitstring>> ->
+        split_bits(k, rest, [chunk | acc])
+
+      _ ->
+        Enum.reverse(acc)
+    end
   end
-  def split_bits(remainder, _k, acc), do: Enum.reverse([remainder | acc])
 
   def generate_new_keys(vault_partitions, h, i \\ 0, acc \\ [])
   def generate_new_keys([], _h, _i, acc), do: Enum.reverse(acc)
