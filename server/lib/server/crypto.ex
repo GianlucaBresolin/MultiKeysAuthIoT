@@ -6,13 +6,14 @@ defmodule Server.Crypto do
   def encrypt_aes_cbc(key, plaintext) do
     iv = :crypto.strong_rand_bytes(16)
     padded = pkcs7_pad(plaintext, 16)
-    encrypted = :crypto.crypto_one_time(:aes_128_cbc, key, iv, padded, true)
+    # use AES-256-CBC to match device expectations (32-byte keys)
+    encrypted = :crypto.crypto_one_time(:aes_256_cbc, key, iv, padded, true)
     concat_binaries(iv, encrypted)
   end
 
   def decrypt_aes_cbc(key, data) do
     <<iv::binary-16, encrypted::binary>> = data
-    padded = :crypto.crypto_one_time(:aes_128_cbc, key, iv, encrypted, false)
+    padded = :crypto.crypto_one_time(:aes_256_cbc, key, iv, encrypted, false)
     pkcs7_unpad(padded)
   end
 
@@ -33,4 +34,6 @@ defmodule Server.Crypto do
       data
     end
   end
+
+  defp concat_binaries(a, b), do: a <> b
 end

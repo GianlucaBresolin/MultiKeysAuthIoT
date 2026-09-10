@@ -12,8 +12,16 @@ defmodule Server.SecureVault do
     [ssl: [cacertfile: String.to_charlist(ca_cert()), verify: :verify_peer]]
   end
 
+  defp uid_to_string(uid) when is_binary(uid) do
+    case byte_size(uid) do
+      1 -> Integer.to_string(:binary.at(uid, 0))
+      _ -> to_string(uid)
+    end
+  end
+
   def store_keys(device_uid, keys) do
-    url = "#{vault_addr()}/v1/secret/data/iot_device/#{device_uid}"
+    uid_s = uid_to_string(device_uid)
+    url = "#{vault_addr()}/v1/secret/data/iot_device/#{uid_s}"
     body = Jason.encode!(%{data: %{keys: keys}})
 
     :httpc.request(:put, {String.to_charlist(url),
@@ -22,7 +30,8 @@ defmodule Server.SecureVault do
   end
 
   def get_keys(device_uid) do
-    url = "#{vault_addr()}/v1/secret/data/iot_device/#{device_uid}"
+    uid_s = uid_to_string(device_uid)
+    url = "#{vault_addr()}/v1/secret/data/iot_device/#{uid_s}"
 
     case :httpc.request(:get, {String.to_charlist(url),
       [{~c"X-Vault-Token", String.to_charlist(vault_token())}]}, http_opts(), []) do
