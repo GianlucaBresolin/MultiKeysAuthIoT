@@ -23,7 +23,7 @@ fn split_json_array(s: &str) -> Vec<&str> {
     if end > 0 && bytes[end-1] == b']' { end -= 1; }
     let inner = &s[start..end];
 
-    // Now iterate and split by commas, but allow spaces. We'll also strip surrounding quotes from each token
+    // split by commas, but allow spaces (also strip surrounding quotes)
     let mut i = 0usize;
     let inner_bytes = inner.as_bytes();
     let len = inner_bytes.len();
@@ -47,7 +47,6 @@ fn split_json_array(s: &str) -> Vec<&str> {
     v
 }
 
-// Simple base64 decoder (handles standard base64 with '=' padding)
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut map = [255u8; 256];
     // A-Z
@@ -86,12 +85,6 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
             let b1 = (chunk[1] << 4) | (chunk[2] >> 2);
             let b2 = (chunk[2] << 6) | chunk[3];
             out.push(b0);
-            // check original chars for padding to decide whether push b1/b2
-            // To determine padding, inspect s at positions i-2 and i-1 (may be '='). Simpler: count padding in last processed 4 chars
-            // But we didn't keep original chars; instead, recompute padding by looking ahead in bytes slice
-            // Simpler robust approach: read the original 4 chars from bytes slice directly
-            // Calculate start index of this quartet in original string
-            // However for simplicity, we'll check actual base64 string for '=' in the last 2 positions relative to i
             let start_q = i.saturating_sub(4);
             let pad1 = if start_q + 2 < bytes.len() && bytes[start_q+2] == b'=' { true } else { false };
             let pad2 = if start_q + 3 < bytes.len() && bytes[start_q+3] == b'=' { true } else { false };
@@ -104,7 +97,6 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
             idx = 0;
         }
     }
-    // Handle remaining if any (should not happen in valid base64)
     Some(out)
 }
 
@@ -134,7 +126,6 @@ fn parse_keys_from_json_base64(s: &str) -> Vec<[u8;32]> {
     res
 }
 
-// Globals stored as leaked boxed slices for 'static lifetime
 static mut SKEY_PTR: *const [u8;32] = ptr::null();
 static mut KEYS_PTR: *const [u8; 32] = ptr::null();
 static mut KEYS_LEN: usize = 0;

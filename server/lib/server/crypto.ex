@@ -1,4 +1,7 @@
 defmodule Server.Crypto do
+  ########################################################################
+  ### Crypto Interface
+  ########################################################################
   def hmac(data, key, algorithm \\ :sha256) do
     :crypto.mac(:hmac, algorithm, key, data)
   end
@@ -17,6 +20,9 @@ defmodule Server.Crypto do
     pkcs7_unpad(padded)
   end
 
+  ########################################################################
+  ### Internal Utils
+  ########################################################################
   defp pkcs7_pad(data, block_size) do
     pad_len = rem(block_size - rem(byte_size(data), block_size), block_size)
     pad_len = if pad_len == 0, do: block_size, else: pad_len

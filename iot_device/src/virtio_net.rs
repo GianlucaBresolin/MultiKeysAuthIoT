@@ -76,7 +76,8 @@ impl<'a, H: Hal, T: Transport> RxToken for VirtioRxToken<'a, H, T> {
         F: FnOnce(&[u8]) -> R,
     {
         let mut buf = self.0.receive().expect("recv failed");
-        let result = f(buf.packet_mut());
+        let pkt = buf.packet_mut();
+        let result = f(pkt);
         self.0.recycle_rx_buffer(buf).expect("recycle failed");
         result
     }
@@ -89,7 +90,10 @@ impl<'a, H: Hal, T: Transport> TxToken for VirtioTxToken<'a, H, T> {
     {
         let mut tx_buf = self.0.new_tx_buffer(len);
         let result = f(tx_buf.packet_mut());
-        self.0.send(tx_buf).expect("send failed");
+        match self.0.send(tx_buf) {
+            Ok(_) => {},
+            Err(_) => crate::uart::puts("virtio send FAILED\r\n"),
+        }
         result
     }
 }

@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y \
     binutils-aarch64-linux-gnu \
     build-essential \
     curl \
+    iproute2 \
+    tcpdump \
+    iputils-ping \
+    iptables \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustup target add aarch64-unknown-none && \
@@ -26,20 +30,16 @@ ENV P=${P}
 WORKDIR /app
 COPY . .
 
-RUN apt-get update && apt-get install -y \
-    qemu-system-arm \
-    gcc-aarch64-linux-gnu \
-    binutils-aarch64-linux-gnu \
-    build-essential \
-    curl \
-    iproute2 \
-    tcpdump \
-    iputils-ping \
-    iptables \
-    && rm -rf /var/lib/apt/lists/*
+# Build fatto qui, a build-time dell'immagine (output visibile solo al `docker build`, non al `run`)
+RUN cargo build --release --target aarch64-unknown-none
 
-COPY /entrypoint.sh /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["cargo", "run", "--release", "--target", "aarch64-unknown-none"]
+CMD ["qemu-system-aarch64", "-M", "virt", "-cpu", "max", "-m", "128M", "-nographic", \
+     "-global", "virtio-mmio.force-legacy=false", \
+     "-device", "virtio-net-device,netdev=net0,mac=52:54:00:12:34:56", \
+     "-netdev", "tap,id=net0,ifname=tap0,script=no,downscript=no", \
+     "-device", "virtio-rng-device", \
+     "-kernel", "target/aarch64-unknown-none/release/iot_device"]
