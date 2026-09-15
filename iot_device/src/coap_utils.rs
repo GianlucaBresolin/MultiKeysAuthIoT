@@ -1,16 +1,55 @@
 
-pub fn build_coap_non_post(message_id: u16, payload: &[u8], out: &mut [u8]) -> Option<usize> {
-    if out.len() < 5 + payload.len() {
-        return None;
-    }
- 
+pub fn build_coap_non_post(
+    message_id: u16,
+    uri_path_segments: &[&[u8]],
+    payload: &[u8],
+    out: &mut [u8],
+) -> Option<usize> {
+    let mut offset = 4;
+
     out[0] = 0x50; // Ver=1, Type=NON, TKL=0
     out[1] = 0x02; // Code=0.02 (POST)
     out[2..4].copy_from_slice(&message_id.to_be_bytes());
-    out[4] = 0xFF; // payload marker
-    out[5..5 + payload.len()].copy_from_slice(payload);
- 
-    Some(5 + payload.len())
+
+    let mut prev_option_number = 0u16;
+    const URI_PATH_OPTION: u16 = 11;
+
+    for segment in uri_path_segments {
+        let delta = URI_PATH_OPTION - prev_option_number;
+        prev_option_number = URI_PATH_OPTION;
+
+        let seg_len = segment.len();
+
+        if delta > 12 || seg_len > 12 {
+            return None;
+        }
+
+        if offset >= out.len() {
+            return None;
+        }
+        out[offset] = ((delta as u8) << 4) | (seg_len as u8);
+        offset += 1;
+
+        if offset + seg_len > out.len() {
+            return None;
+        }
+        out[offset..offset + seg_len].copy_from_slice(segment);
+        offset += seg_len;
+    }
+
+    if offset >= out.len() {
+        return None;
+    }
+    out[offset] = 0xFF; // payload marker
+    offset += 1;
+
+    if offset + payload.len() > out.len() {
+        return None;
+    }
+    out[offset..offset + payload.len()].copy_from_slice(payload);
+    offset += payload.len();
+
+    Some(offset)
 }
 
 pub enum ServerResponse {
