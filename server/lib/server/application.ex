@@ -12,7 +12,7 @@ defmodule Server.Application do
     end)
 
     keys = System.get_env("SERVER_KEYS", "{}") |> Jason.decode!()
-    p = String.to_integer(System.fetch_env!("SERVER_P"))
+    p = String.to_integer(System.fetch_env!("P"))
 
     children = [
       %{
@@ -31,7 +31,7 @@ defmodule Server.Application do
     :ok = :coap_server_registry.add_handler(["data"], Server.CoapHandler, [])
     {:ok, _} = :coap_server.start_udp(:coap_udp_socket)
 
-    IO.puts("Server started with IOT_UIDS: #{inspect(iot_uids)}, SERVER_KEYS: #{inspect(keys)}, SERVER_P: #{p}")
+    # IO.puts("Server started with IOT_UIDS: #{inspect(iot_uids)}, SERVER_KEYS: #{inspect(keys)}, SERVER_P: #{p}")
     {:ok, pid}
   end
 end

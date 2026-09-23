@@ -24,11 +24,8 @@ defmodule Server.CoapHandler do
       {:ok, {:content, resp_payload}} ->
         {:ok, :content, coap_content(payload: resp_payload)}
 
-      {:ok, :changed} ->
-        {:ok, :changed, coap_content(payload: <<>>)}
-
-      {:error, {:bad_request, _reason}} ->
-        {:error, :bad_request}
+      {:error, {:session_timeout, resp_payload}} ->
+        {:ok, :content, coap_content(payload: resp_payload)}
 
       {:error, _reason} ->
         {:error, :bad_request}
