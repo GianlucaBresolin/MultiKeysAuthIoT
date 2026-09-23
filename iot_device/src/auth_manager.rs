@@ -306,6 +306,9 @@ where
             Err(e) => return Err(e),
         };
 
+        let n = keys.len();
+        let m = keys[0].len();
+
         let mut concat_old_keys: Vec<u8> = Vec::new();
         for kb in keys.iter() {
             concat_old_keys.extend_from_slice(kb);
@@ -319,13 +322,13 @@ where
         let k = h.len(); // bytes per block (32)
 
         // split concat_old_keys into blocks of size k (pad last block with zeros)
-        let mut new_keys: Vec<[u8; 32]> = Vec::new();
+        let mut new_vault: Vec<u8> = Vec::new();
         let mut idx = 0usize;
         let mut vault_partition_index: u8 = 0;
         while idx < concat_old_keys.len() {
             let take = core::cmp::min(k, concat_old_keys.len() - idx);
             let mut vault_partition = [0u8; 32];
-            vault_partition[..take].copy_from_slice(&&concat_old_keys[idx..idx + take]);
+            vault_partition[..take].copy_from_slice(&concat_old_keys[idx..idx + take]);
             // pad rest with zeros (already zeroed)
 
             // compute mask = h XOR block_index (byte-wise) and new_key = vault_partition XOR mask
@@ -333,16 +336,25 @@ where
             for b in 0..k {
                 mask[b] = h[b] ^ vault_partition_index;
             }
-            let mut new_key = [0u8; 32];
+            let mut new_block = [0u8; 32];
             for b in 0..k {
-                new_key[b] = vault_partition[b] ^ mask[b];
+                new_block[b] = vault_partition[b] ^ mask[b];
             }
 
-            new_keys.push(new_key);
+            new_vault.extend_from_slice(&new_block);
 
             idx += take;
             vault_partition_index = vault_partition_index.wrapping_add(1);
         }
+
+        new_vault.truncate(n * m);
+        let new_keys: Vec<[u8; 32]> = new_vault
+            .chunks(m)
+            .map(|c| {
+                let mut arr = [0u8; 32];
+                arr[..c.len()].copy_from_slice(c);
+                arr
+            }).collect();
 
         uart::puts("Change keys status: success.\n");
 

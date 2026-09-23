@@ -262,12 +262,18 @@ defmodule Server do
 
   defp change_keys(iot_uid, exchanged_data) do
     keys = SecureVault.get_keys(<<iot_uid>>)
-    concat_keys = Enum.map(keys, fn k ->
-      case Base.decode64(k) do
-        {:ok, bin} -> bin
-        _ -> k
-      end
-    end) |> :erlang.iolist_to_binary()
+    decoded_keys =
+      Enum.map(keys, fn k ->
+        case Base.decode64(k) do
+          {:ok, bin} -> bin
+          _ -> k
+        end
+      end)
+
+    n = length(decoded_keys)
+    m = bit_size(hd(decoded_keys))
+
+    concat_keys = :erlang.iolist_to_binary(decoded_keys)
 
     h = Crypto.hmac(concat_keys, exchanged_data)
     k = bit_size(h)
@@ -275,7 +281,13 @@ defmodule Server do
     vault_partitions = split_with_padding(concat_keys, k)
 
     new_keys_raw = generate_new_keys(vault_partitions, h)
-    new_keys_b64 = Enum.map(new_keys_raw, &Base.encode64/1)
+
+    new_vault_bin = :erlang.iolist_to_binary(new_keys_raw)
+    new_vault_truncated = binary_part(new_vault_bin, 0, div(n * m, 8))
+
+    new_keys_raw_fixed = split_bits(new_vault_truncated, m)
+
+    new_keys_b64 = Enum.map(new_keys_raw_fixed, &Base.encode64/1)
 
     case SecureVault.store_keys(<<iot_uid>>, new_keys_b64) do
       {:ok, {{_, status, _}, _, _body}} when status in 200..299 ->
