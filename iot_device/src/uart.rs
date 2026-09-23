@@ -1,15 +1,5 @@
 const UART0_BASE: usize = 0x0900_0000;
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn uart_puts(s: &str) {
-    puts(s);
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn uart_put_hex(value: usize) {
-    put_hex(&value.to_le_bytes());
-}
-
 pub fn putc(c: u8) {
     unsafe {
         core::ptr::write_volatile(UART0_BASE as *mut u8, c);

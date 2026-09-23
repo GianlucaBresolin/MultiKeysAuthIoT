@@ -123,8 +123,6 @@ impl<'a> CommunicationManager<'a> {
 
             if let Ok((data, _endpoint)) = self.sockets.get_mut::<udp::Socket>(self.udp_handle).recv() {
                 if let Some(coap_payload) = coap_utils::extract_coap_payload(data) {
-                    crate::uart::puts("Extracted CoAP payload: ");
-                    crate::uart::put_hex(coap_payload);
                     return Some(coap_payload.to_vec());
                 }
             }

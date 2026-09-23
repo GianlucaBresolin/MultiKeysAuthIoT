@@ -23,6 +23,7 @@ where
     p: u8,
     t1: Option<u64>,
     r2: Option<[u8; 8]>,
+    session_id: Option<u64>,
     session_key: Option<[u8; 32]>,
     last_c2: HVec<u8, 64>,
     telemetry_buffer: Vec<u8>,
@@ -44,25 +45,49 @@ where
             rng,
             comm,
             iot_uid,
-            p,
+            p, 
             t1: None,
             r2: None,
+            session_id: None,
             session_key: None,
             last_c2: HVec::new(),
             telemetry_buffer: Vec::new(),
         }
     }
 
-    pub fn init_auth_session(&mut self) {
-        // M1 = {iot_uid}
-        let m1 = [self.iot_uid];
+    ////////////////////////////////////////////////////////////////
+    /// MultiKeys Auth 
+    ////////////////////////////////////////////////////////////////
+    pub fn init_auth_session<DeviceT>(
+        &mut self, 
+        iface: &mut Interface, 
+        net: &mut DeviceT
+    )
+    where
+    DeviceT: smoltcp::phy::Device,
+    {
+        let mut session_id_bytes = [0u8; 8];
+        self.rng.fill_bytes(&mut session_id_bytes);
+        let session_id = u64::from_le_bytes(session_id_bytes);
+        self.session_id = Some(session_id);
+
+        // M1 = {iot_uid || session_id}
+        let mut m1 = [0u8; 9];
+        m1[0] = self.iot_uid;
+        m1[1..].copy_from_slice(&self.session_id.unwrap().to_be_bytes());
+
+        uart::puts("Tx M1:\n");
+        uart::puts("- IOT_UID: ");
+        uart::put_hex(&[self.iot_uid]);
+        uart::puts("- SESSION_ID: ");
+        uart::put_hex(&session_id_bytes);
 
         // send M1 (application payload only)
-        if let Some(m2_payload) = self.comm.send_and_receive(&m1) {
+        if let Some(m2_payload) = self.comm.send_and_receive(&[b"auth", b"m1"], &m1, iface, net) {
             // handle M2 and prepare M3
             if let Some(m3_pkt) = self.process_m2_and_build_m3(&m2_payload) {
                 // send M3
-                if let Some(m4_payload) = self.comm.send_and_receive(&m3_pkt) {
+                if let Some(m4_payload) = self.comm.send_and_receive(&[b"auth", b"m3"], &m3_pkt, iface, net) {
                     // handle M4
                     self.process_m4(&m4_payload);
                 } else {
@@ -76,8 +101,11 @@ where
         }
     }
 
-    fn process_m2_and_build_m3(&mut self, m2: &[u8]) -> Option<Vec<u8>> {
-        // M2 format assumed: C1 (p bytes of indexes) || r1 (8 bytes)
+    fn process_m2_and_build_m3(
+        &mut self,
+        m2: &[u8]
+    ) -> Option<Vec<u8>> {
+        // M2 format assumed: C1 (P bytes of indexes) || R1 (8 bytes)
         let expected_c1_len = self.p as usize;
         if m2.len() < expected_c1_len + 8 {
             uart::puts("AuthManager: M2 too short or malformed\r\n");
@@ -96,10 +124,6 @@ where
                 return None;
             }
         };
-        if keys.len() == 0 {
-            uart::puts("AuthManager: no keys available\r\n");
-            return None;
-        }
 
         let mut k1 = [0u8; 32];
         for &idx in c1.iter() {
@@ -114,16 +138,24 @@ where
             }
         }
 
+        uart::puts("Rx M2:\n");
+        uart::puts("- C1: ");
+        uart::put_hex(c1);
+        uart::puts("- R1: ");
+        uart::put_hex(&r1);
+        uart::puts("- K1:");
+        uart::put_hex(&k1);
+
         // generate t1
         let mut t1_bytes = [0u8; 8];
         self.rng.fill_bytes(&mut t1_bytes);
         let t1 = u64::from_be_bytes(t1_bytes);
         self.t1 = Some(t1);
 
-        // choose C2 (p unique random indices)
+        // choose C2 (P unique random indices)
         let n = keys.len();
         self.last_c2.clear();
-        // If p > n it's impossible to pick unique indices
+        // If P > n it's impossible to pick unique indices
         if (self.p as usize) > n {
             uart::puts("AuthManager: p is larger than number of keys; cannot select unique C2\r\n");
             return None;
@@ -151,6 +183,16 @@ where
         self.rng.fill_bytes(&mut r2_bytes);
         self.r2 = Some(r2_bytes);
 
+        uart::puts("Tx M3:\n");
+        uart::puts("- R1: ");
+        uart::put_hex(&r1);
+        uart::puts("- T1: ");
+        uart::put_hex(&t1_bytes);
+        uart::puts("- C2: ");
+        uart::put_hex(&self.last_c2);
+        uart::puts("- R2: ");
+        uart::put_hex(&r2_bytes);
+
         // plaintext = r1 || t1 || C2 || r2
         let mut plaintext: Vec<u8> = Vec::new();
         plaintext.extend_from_slice(&r1);
@@ -164,6 +206,7 @@ where
 
         // return ciphertext (IV || ciphertext) as raw payload for CommunicationManager to wrap into CoAP
         let mut payload = Vec::new();
+        payload.extend_from_slice(&self.session_id.unwrap().to_be_bytes());
         payload.extend_from_slice(&out_buf[..enc_len]);
         Some(payload)
     }
@@ -238,19 +281,26 @@ where
         let t2 = u64::from_be_bytes(t2_b);
         // derive session key = t1 xor t2 expanded to 32 bytes
         let t2_exp = t2.to_be_bytes();
-        let mut sess = [0u8; 32];
+
+        uart::puts("Rx M4:\n");
+        uart::puts("- R2: ");
+        uart::put_hex(&r2_recv);
+        uart::puts("- T2:");
+        uart::put_hex(&t2_exp);
+
+        let mut session_key = [0u8; 32];
         for i in 0..32 {
-            sess[i] = t1_bytes[i % 8] ^ t2_exp[i % 8];
+            session_key[i] = t1_bytes[i % 8] ^ t2_exp[i % 8];
         }
-        self.session_key = Some(sess);
-        uart::puts("AuthManager: session key established\r\n");
+        self.session_key = Some(session_key);
+
+        uart::puts("SESSION_KEY:");
+        uart::put_hex(&session_key);
     }
 
-    pub fn append_acked_telemetry(&mut self, data: &[u8]) {
-        self.telemetry_buffer.extend_from_slice(data);
-    }
-
-    pub fn update_keys(&mut self) -> Result<(), crate::secure_store::Error> {
+    pub fn update_keys(
+        &mut self
+    ) -> Result<(), crate::secure_store::Error> {
         let keys = match self.key_store.get_keys() {
             Ok(k) => k,
             Err(e) => return Err(e),
@@ -294,9 +344,21 @@ where
             vault_partition_index = vault_partition_index.wrapping_add(1);
         }
 
-        // 5) store back into secure vault (uses AuthManager's RNG)
+        uart::puts("Change keys status: success.\n");
+
         self.key_store
             .store_keys(&new_keys[..], new_keys.len(), &mut self.rng)
+    }
+
+    ////////////////////////////////////////////////////////////////
+    /// Telemetry Operations
+    ////////////////////////////////////////////////////////////////
+    pub fn append_acked_telemetry(&mut self, data: &[u8]) {
+        self.telemetry_buffer.extend_from_slice(data);
+    }
+
+    pub fn clear_telemetry_buffer(&mut self) {
+        self.telemetry_buffer.clear();
     }
 
     ////////////////////////////////////////////////////////////////
@@ -313,7 +375,10 @@ where
         self.comm.can_send()
     }
 
-    pub fn send_telemetry(&mut self, payload: &[u8]) -> bool {
+    pub fn send_telemetry(
+        &mut self, 
+        payload: &[u8]
+    ) -> bool {
         // Ensure we have a session key
         let session_key = match self.session_key {
             Some(k) => k,
@@ -327,10 +392,16 @@ where
         let mut out_buf = [0u8; AES_IV_AND_PAD_BUF];
         let enc_len = crypto::encrypt_aes_cbc(&mut self.rng, &session_key, payload, &mut out_buf);
 
-        self.comm.send_to_server(&out_buf[..enc_len])
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&self.session_id.unwrap().to_be_bytes());
+        msg.extend_from_slice(&out_buf[..enc_len]);
+
+        self.comm.send_to_server(&[b"data"], &msg)
     }
 
-    pub fn try_receive_parsed(&mut self) -> Option<crate::communication_manager::CommResponse> {
+    pub fn try_receive_parsed(
+        &mut self
+    ) -> Option<crate::communication_manager::CommResponse> {
         self.comm.try_receive_parsed()
     }
 }

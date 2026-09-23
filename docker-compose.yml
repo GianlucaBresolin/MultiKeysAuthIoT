@@ -70,7 +70,8 @@ services:
   server:
     build: ./server
     depends_on:
-      - vault-init
+      vault-init:
+        condition: service_completed_successfully
     volumes:
       - ./vault-init-out:/vault-init-out
       - ./tls:/tls
@@ -86,7 +87,7 @@ services:
       VAULT_CACERT: /tls/vault-cert.pem
       IOT_UIDS: "1"
       SERVER_KEYS: ${SERVER_KEYS:-}
-      SERVER_P: ${P:-3}
+      P: ${P:-3}
 
   iot_device: 
     build:

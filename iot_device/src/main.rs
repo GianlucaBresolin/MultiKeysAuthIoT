@@ -128,7 +128,6 @@ fn main() -> ! {
     
     auth_manager.init_auth_session(&mut iface, &mut net);
 
-    uart::puts("IoT Device: authentication happens succesfully.\r\n");
     uart::puts("IoT Device: starting main loop\r\n");
     
     const TELEMETRY_INTERVAL_MS: i64 = 5000;
@@ -146,21 +145,23 @@ fn main() -> ! {
         if auth_manager.can_send() && now_ms >= next_send_at {
             let payload = telemtry_data.to_be_bytes();
             let _sent = auth_manager.send_telemetry(&payload);
+            next_send_at = now_ms + TELEMETRY_INTERVAL_MS;
         }
 
         // Server response handling (non-blocking receive via CommunicationManager)
         if let Some(msg) = auth_manager.try_receive_parsed() {
             match msg {
                 CommResponse::Ack => {
-                    // the payload that was acknowledged is the telemetry value we sent previously
+                    // the payload that was acknowledged is the telemetry value
+                    // we sent previously
+                    uart::puts("Ack received from server.\n");
                     let acked = telemtry_data.to_be_bytes();
                     auth_manager.append_acked_telemetry(&acked);
-
-                    next_send_at = clock::now_millis() + TELEMETRY_INTERVAL_MS;
                     telemtry_data += 1;
                 }
                 CommResponse::AuthSessionTimeout => {
                     let _ = auth_manager.update_keys();
+                    auth_manager.clear_telemetry_buffer();
                     uart::puts("AuthManager: session timeout, keys updated\r\n");
                     auth_manager.init_auth_session(&mut iface, &mut net);
                     next_send_at = clock::now_millis() + TELEMETRY_INTERVAL_MS;
