@@ -8,7 +8,8 @@ services:
       -c "openssl req -x509 -newkey rsa:2048 -nodes
       -keyout /tls/vault-key.pem -out /tls/vault-cert.pem
       -days 1 -subj '/CN=vault'
-      -addext 'subjectAltName=DNS:vault,DNS:localhost,IP:127.0.0.1'"
+      -addext 'subjectAltName=DNS:vault,DNS:localhost,IP:127.0.0.1'
+      && chmod 644 /tls/vault-key.pem"
 
   vault:
     image: hashicorp/vault
